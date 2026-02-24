@@ -1,0 +1,7 @@
+# The APP_KEY and SIGN_KEY in this repo are NOT secrets.
+# They are public constants from the Midea Air APK, identical for every
+# installation — equivalent to an OAuth client_id. User credentials are
+# provided at runtime via CLI args or environment variables.
+secret:
+  ignored-paths:
+    - "midea_cloud.py"

@@ -28,11 +28,17 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
 # ---------------------------------------------------------------------------
-# Midea Air app constants (public, extracted from APK)
+# Midea Air app constants (public, extracted from the published APK)
+#
+# These are NOT secrets. They are the same for every installation of the
+# Midea Air app and are embedded in the publicly downloadable APK. They
+# function as a public client identifier, similar to an OAuth client_id.
+# The actual user credentials are never stored here — they are provided
+# at runtime via CLI arguments or environment variables.
 # ---------------------------------------------------------------------------
 APP_ID = "1117"
-APP_KEY = "ff0cf6f5f0c3471de36341cab3f7a9af"
-SIGN_KEY = "xhdiwjnchekd4d512chdjx5d8e4c394D2D7S"
+APP_KEY = "ff0cf6f5f0c3471de36341cab3f7a9af"  # noqa: S105
+SIGN_KEY = "xhdiwjnchekd4d512chdjx5d8e4c394D2D7S"  # noqa: S105
 
 # Regional API servers — the correct one is auto-detected at login
 API_SERVERS = {
