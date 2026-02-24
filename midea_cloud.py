@@ -58,6 +58,21 @@ SUPPORTED_APPS = {
 DEVICE_TYPE_AC = 0xAC
 DEVICE_TYPE_DEHUMIDIFIER = 0xA1
 
+# AC operating modes
+AC_MODE_AUTO = 0
+AC_MODE_COOL = 1
+AC_MODE_DRY = 2
+AC_MODE_HEAT = 3
+AC_MODE_FAN = 4
+AC_MODES = {0: "Auto", 1: "Cool", 2: "Dry", 3: "Heat", 4: "Fan"}
+AC_MODES_BY_NAME = {v.lower(): k for k, v in AC_MODES.items()}
+
+# AC fan speeds
+AC_FAN_AUTO = 102
+AC_FAN_LOW = 40
+AC_FAN_MEDIUM = 60
+AC_FAN_HIGH = 80
+
 # ---------------------------------------------------------------------------
 # CRC8 lookup table
 # ---------------------------------------------------------------------------
@@ -258,6 +273,39 @@ def build_ac_status_query():
     return data
 
 
+def build_ac_set_command(power_on, mode=AC_MODE_AUTO, temp=24, fan=AC_FAN_AUTO,
+                         prompt_tone=True, swing_v=False, swing_h=False):
+    """Build a 33-byte AC SET command.
+
+    The device requires SET commands to use the same 33-byte frame size as
+    query commands (length byte = 0x20).  Longer formats (e.g. 35 bytes)
+    are silently ignored by the device, returning error 3176.
+    """
+    power = 0x01 if power_on else 0
+    tone = 0x40 if prompt_tone else 0
+    mode_bits = (mode << 5) & 0xE0
+    temp_int = int(temp)
+    temp_half = 0x10 if round(temp * 2) % 2 != 0 else 0
+    temp_bits = (temp_int - 16) & 0x0F
+    fan_speed = fan & 0x7F
+    swing = 0x30 | (0x0C if swing_v else 0) | (0x03 if swing_h else 0)
+
+    data = bytearray([
+        0xAA, 0x20, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        0x40,
+        power | tone,
+        mode_bits | temp_half | temp_bits,
+        fan_speed,
+        0x00, 0x00, 0x00,
+        swing,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x01,
+    ])
+    data.append(crc8(data[10:]))
+    data.append((~sum(data[1:]) + 1) & 0xFF)
+    return data
+
+
 def parse_ac_response(data):
     """Parse an AC status response and extract temperature readings."""
     if not data or len(data) < 2:
@@ -278,8 +326,7 @@ def parse_ac_response(data):
 
     running = (d[1] & 0x01) != 0
     mode_val = (d[2] >> 5) & 0x07
-    modes = {0: "Auto", 1: "Cool", 2: "Dry", 3: "Heat", 4: "Fan"}
-    mode = modes.get(mode_val, f"Unknown({mode_val})")
+    mode = AC_MODES.get(mode_val, f"Unknown({mode_val})")
     target_temp = (d[2] & 0x0F) + 16
     if d[2] & 0x10:
         target_temp += 0.5
@@ -442,6 +489,18 @@ class MideaCloud:
             return parse_ac_response(reply)
         return None
 
+    def set_ac(self, appliance_id, power_on, mode=AC_MODE_AUTO, temp=24,
+               fan=AC_FAN_AUTO, prompt_tone=True, swing_v=False, swing_h=False):
+        """Set AC state and return the parsed response status."""
+        cmd = build_ac_set_command(
+            power_on=power_on, mode=mode, temp=temp, fan=fan,
+            prompt_tone=prompt_tone, swing_v=swing_v, swing_h=swing_h,
+        )
+        reply = self.send_command(appliance_id, cmd)
+        if reply:
+            return parse_ac_response(reply)
+        return None
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -480,6 +539,28 @@ def main():
         action="store_true",
         help="Output results as JSON",
     )
+
+    # Control options
+    ctrl = parser.add_argument_group("control", "Control an AC unit (requires --device)")
+    ctrl.add_argument("--device", help="Device name or ID to control")
+    ctrl.add_argument(
+        "--on", dest="power", action="store_true", default=None, help="Turn AC on"
+    )
+    ctrl.add_argument(
+        "--off", dest="power", action="store_false", help="Turn AC off"
+    )
+    ctrl.add_argument(
+        "--mode",
+        choices=["auto", "cool", "dry", "heat", "fan"],
+        help="Set operating mode",
+    )
+    ctrl.add_argument("--temp", type=float, help="Set target temperature (16-30)")
+    ctrl.add_argument(
+        "--fan",
+        choices=["auto", "low", "medium", "high"],
+        help="Set fan speed",
+    )
+
     args = parser.parse_args()
 
     if not args.account or not args.password:
@@ -500,6 +581,44 @@ def main():
     if not devices:
         print("No devices found.", file=sys.stderr)
         sys.exit(1)
+
+    # --- Control mode ---
+    if args.device and args.power is not None:
+        fan_map = {"auto": AC_FAN_AUTO, "low": AC_FAN_LOW,
+                   "medium": AC_FAN_MEDIUM, "high": AC_FAN_HIGH}
+        # Find device by name or ID
+        target_id = None
+        for dev_id, info in devices.items():
+            if args.device.lower() in (info["name"].lower(), dev_id):
+                target_id = dev_id
+                break
+        if not target_id:
+            print(f"Device '{args.device}' not found.", file=sys.stderr)
+            sys.exit(1)
+
+        # Get current status to use as defaults
+        current = client.get_ac_status(target_id)
+        cur_mode = AC_MODES_BY_NAME.get(
+            (current["mode"].lower() if current else "auto"), AC_MODE_AUTO
+        )
+        cur_temp = current["target_temp"] if current else 24
+
+        mode = AC_MODES_BY_NAME[args.mode] if args.mode else cur_mode
+        temp = args.temp if args.temp is not None else cur_temp
+        fan = fan_map.get(args.fan, AC_FAN_AUTO) if args.fan else AC_FAN_AUTO
+
+        result = client.set_ac(
+            target_id, power_on=args.power, mode=mode, temp=temp, fan=fan,
+        )
+        if result:
+            action = "ON" if args.power else "OFF"
+            print(f"{devices[target_id]['name']}: {action}")
+            print(f"  Mode:    {result['mode']}")
+            print(f"  Target:  {result['target_temp']} C")
+            print(f"  Running: {result['running']}")
+        else:
+            print("Command sent (no reply from device)", file=sys.stderr)
+        return
 
     if args.list_only:
         for dev_id, info in devices.items():
