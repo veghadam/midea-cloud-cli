@@ -143,8 +143,9 @@ allowlisted room is at or below `MIDEA_THERMOSTAT_ON_C` (default 6°C), then
 turns the unit off at or above `MIDEA_THERMOSTAT_OFF_C` (default 10°C).
 Midea units accept setpoints from 16°C, so the controller uses a 16°C setpoint
 and switches the unit off based on the reported room temperature. The default
-poll interval is 300 seconds; use 60 seconds for thermostat operation. The
-hysteresis latch persists at `/var/lib/midea-thermostat/state.json`.
+poll interval is 300 seconds, including the deployed thermostat configuration.
+Faster polling is configurable if a quicker response is needed, but it increases
+Midea Cloud requests. The hysteresis latch persists at `/var/lib/midea-thermostat/state.json`.
 The exporter exposes `midea_thermostat_enabled`,
 `midea_thermostat_control_error`, and per-device
 `midea_thermostat_heating` gauges.
