@@ -68,7 +68,7 @@ python midea_cloud.py --device "Living room" --on --mode cool --temp 25 --fan lo
 | `--on` | Turn AC on |
 | `--off` | Turn AC off |
 | `--mode` | Set mode: `auto`, `cool`, `dry`, `heat`, `fan` |
-| `--temp` | Set target temperature (16-30) |
+| `--temp` | Set target temperature (17-30) |
 | `--fan` | Set fan speed: `auto`, `low`, `medium`, `high` |
 
 ### Example output
@@ -141,7 +141,7 @@ The optional hysteresis thermostat is disabled by default. To enable it, set
 `MIDEA_THERMOSTAT_DEVICE_NAMES` allowlist. It starts Heat mode when an
 allowlisted room is at or below `MIDEA_THERMOSTAT_ON_C` (default 6°C), then
 turns the unit off at or above `MIDEA_THERMOSTAT_OFF_C` (default 10°C).
-Midea units accept setpoints from 16°C, so the controller uses a 16°C setpoint
+Midea units accept setpoints from 17°C, so the controller uses a 17°C setpoint
 and switches the unit off based on the reported room temperature. The default
 poll interval is 300 seconds, including the deployed thermostat configuration.
 Faster polling is configurable if a quicker response is needed, but it increases
