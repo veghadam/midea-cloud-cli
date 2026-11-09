@@ -26,7 +26,7 @@ SERVER = os.environ.get("MIDEA_SERVER")
 THERMOSTAT_ENABLED = os.environ.get("MIDEA_THERMOSTAT_ENABLED", "0") == "1"
 THERMOSTAT_ON_C = float(os.environ.get("MIDEA_THERMOSTAT_ON_C", "6"))
 THERMOSTAT_OFF_C = float(os.environ.get("MIDEA_THERMOSTAT_OFF_C", "10"))
-THERMOSTAT_SETPOINT_C = max(16, float(os.environ.get("MIDEA_THERMOSTAT_SETPOINT_C", "16")))
+THERMOSTAT_SETPOINT_C = max(17, float(os.environ.get("MIDEA_THERMOSTAT_SETPOINT_C", "17")))
 THERMOSTAT_DEVICE_NAMES = {
     name.strip()
     for name in os.environ.get("MIDEA_THERMOSTAT_DEVICE_NAMES", "").split(",")
