@@ -132,10 +132,12 @@ def _apply_thermostat(client, appliance_id, device, values, state, now):
     active = bool(heating.get(device))
 
     # Recover a prior successful heat command if the state file was lost.
+    current_mode_is_heat = str(values.get("mode", "")).lower() == "heat"
+    current_target = _number(values.get("target_temp"))
     if not active and temperature < THERMOSTAT_OFF_C:
         active = (
-            str(values.get("mode", "")).lower() == "heat"
-            and _number(values.get("target_temp")) == THERMOSTAT_SETPOINT_C
+            current_mode_is_heat
+            and current_target == THERMOSTAT_SETPOINT_C
             and bool(values.get("running"))
         )
         if active:
