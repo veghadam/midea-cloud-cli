@@ -110,6 +110,33 @@ python midea_cloud.py --json
 }
 ```
 
+## Prometheus exporter
+
+The optional `midea_metrics.py` endpoint polls Midea Cloud for read-only AC
+status and exposes Prometheus metrics on port 9899. It uses the same Python
+environment and credentials as this CLI.
+
+Configure `MIDEA_ACCOUNT` and `MIDEA_PASSWORD` in a root-readable systemd
+EnvironmentFile; never put credential values in this repository. Optional
+settings are `MIDEA_APP` (defaults to `midea_air`),
+`MIDEA_SERVER` (regional server override), and
+`MIDEA_METRICS_INTERVAL_SECONDS` (defaults to 300 seconds).
+
+Run the exporter with:
+
+```bash
+python midea_metrics.py
+```
+
+Prometheus can scrape `http://<mini-host>:9899/metrics`. The exporter provides
+`midea_checker_configured`, `midea_checker_up`,
+`midea_checker_last_success_timestamp`, and per-device
+`midea_ac_online`, `midea_ac_running`,
+`midea_ac_indoor_temperature_celsius`,
+`midea_ac_outdoor_temperature_celsius`, and
+`midea_ac_target_temperature_celsius` gauges. It never sends control
+commands.
+
 ## Using as a library
 
 ```python
