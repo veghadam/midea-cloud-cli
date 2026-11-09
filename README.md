@@ -134,8 +134,20 @@ Prometheus can scrape `http://<mini-host>:9899/metrics`. The exporter provides
 `midea_ac_online`, `midea_ac_running`,
 `midea_ac_indoor_temperature_celsius`,
 `midea_ac_outdoor_temperature_celsius`, and
-`midea_ac_target_temperature_celsius` gauges. It never sends control
-commands.
+`midea_ac_target_temperature_celsius` gauges.
+
+The optional hysteresis thermostat is disabled by default. To enable it, set
+`MIDEA_THERMOSTAT_ENABLED=1` and provide an explicit comma-separated
+`MIDEA_THERMOSTAT_DEVICE_NAMES` allowlist. It starts Heat mode when an
+allowlisted room is at or below `MIDEA_THERMOSTAT_ON_C` (default 6°C), then
+turns the unit off at or above `MIDEA_THERMOSTAT_OFF_C` (default 10°C).
+Midea units accept setpoints from 16°C, so the controller uses a 16°C setpoint
+and switches the unit off based on the reported room temperature. The default
+poll interval is 300 seconds; use 60 seconds for thermostat operation. The
+hysteresis latch persists at `/var/lib/midea-thermostat/state.json`.
+The exporter exposes `midea_thermostat_enabled`,
+`midea_thermostat_control_error`, and per-device
+`midea_thermostat_heating` gauges.
 
 ## Using as a library
 
