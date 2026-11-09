@@ -144,6 +144,9 @@ def poll_forever():
         try:
             poll_once()
         except Exception as exc:
+            with METRICS_LOCK:
+                METRICS["up"] = 0
+                METRICS["devices"] = {}
             # Do not log exception details: API errors can contain account or
             # device identifiers. The exception class is enough to find the
             # failure category in the journal.
