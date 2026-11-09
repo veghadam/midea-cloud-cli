@@ -109,7 +109,11 @@ def _client():
     return CLIENT
 
 
-def _set_ac(client, appliance_id, power_on):\n    # Preserve the appliance saved mode, target temperature, and fan setting.\n    return client.set_ac(appliance_id, power_on=power_on)\n\n
+def _set_ac(client, appliance_id, power_on):
+    # Preserve the appliance saved mode, target temperature, and fan setting.
+    return client.set_ac(appliance_id, power_on=power_on)
+
+
 def _apply_thermostat(client, appliance_id, device, values, state, now):
     if not THERMOSTAT_ENABLED or device not in THERMOSTAT_DEVICE_NAMES:
         return False
