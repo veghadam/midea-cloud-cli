@@ -68,7 +68,7 @@ python midea_cloud.py --device "Living room" --on --mode cool --temp 25 --fan lo
 | `--on` | Turn AC on |
 | `--off` | Turn AC off |
 | `--mode` | Set mode: `auto`, `cool`, `dry`, `heat`, `fan` |
-| `--temp` | Set target temperature (16-30) |
+| `--temp` | Set target temperature (17-30) |
 | `--fan` | Set fan speed: `auto`, `low`, `medium`, `high` |
 
 ### Example output
@@ -109,6 +109,46 @@ python midea_cloud.py --json
   }
 }
 ```
+
+## Prometheus exporter
+
+The optional `midea_metrics.py` endpoint polls Midea Cloud for read-only AC
+status and exposes Prometheus metrics on port 9899. It uses the same Python
+environment and credentials as this CLI.
+
+Configure `MIDEA_ACCOUNT` and `MIDEA_PASSWORD` in a root-readable systemd
+EnvironmentFile; never put credential values in this repository. Optional
+settings are `MIDEA_APP` (defaults to `midea_air`),
+`MIDEA_SERVER` (regional server override), and
+`MIDEA_METRICS_INTERVAL_SECONDS` (defaults to 300 seconds).
+
+Run the exporter with:
+
+```bash
+python midea_metrics.py
+```
+
+Prometheus can scrape `http://<mini-host>:9899/metrics`. The exporter provides
+`midea_checker_configured`, `midea_checker_up`,
+`midea_checker_last_success_timestamp`, and per-device
+`midea_ac_online`, `midea_ac_running`,
+`midea_ac_indoor_temperature_celsius`,
+`midea_ac_outdoor_temperature_celsius`, and
+`midea_ac_target_temperature_celsius` gauges.
+
+The optional hysteresis thermostat is disabled by default. To enable it, set
+`MIDEA_THERMOSTAT_ENABLED=1` and provide an explicit comma-separated
+`MIDEA_THERMOSTAT_DEVICE_NAMES` allowlist. It starts Heat mode when an
+allowlisted room is at or below `MIDEA_THERMOSTAT_ON_C` (default 6°C), then
+turns the unit off at or above `MIDEA_THERMOSTAT_OFF_C` (default 10°C).
+Midea units accept setpoints from 17°C, so the controller uses a 17°C setpoint
+and switches the unit off based on the reported room temperature. The default
+poll interval is 300 seconds, including the deployed thermostat configuration.
+Faster polling is configurable if a quicker response is needed, but it increases
+Midea Cloud requests. The hysteresis latch persists at `/var/lib/midea-thermostat/state.json`.
+The exporter exposes `midea_thermostat_enabled`,
+`midea_thermostat_control_error`, and per-device
+`midea_thermostat_heating` gauges.
 
 ## Using as a library
 
