@@ -208,7 +208,11 @@ def _set_ac(client, appliance_id, power_on):
         raise RuntimeError("could not read current AC settings before power command")
     mode = AC_MODES_BY_NAME.get(str(current.get("mode", "")).lower())
     target = _number(current.get("target_temp"))
-    fan = current.get("fan_speed", AC_FAN_AUTO)
+    fan = current.get("fan_speed")
+    if fan is None:
+        fan = AC_FAN_AUTO
+    else:
+        fan = int(fan)
     if mode is None or target is None:
         raise RuntimeError("current AC settings are incomplete")
     return client.set_ac(
