@@ -241,8 +241,10 @@ def render_metrics():
             if value is not None:
                 lines.append(_sample(metric, labels, value))
 
-    for device, active in sorted(snapshot["thermostat_heating"].items()):
-        lines.append(_sample("midea_thermostat_heating", {"device": device}, int(active)))
+    if THERMOSTAT_ENABLED:
+        for device in sorted(snapshot["devices"]):
+            active = snapshot["thermostat_heating"].get(device, False)
+            lines.append(_sample("midea_thermostat_heating", {"device": device}, int(bool(active))))
 
     return "\n".join(lines) + "\n"
 
