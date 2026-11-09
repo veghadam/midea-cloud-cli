@@ -7,11 +7,13 @@ The thermostat is opt-in. It only controls explicitly allowlisted device names.
 from __future__ import annotations
 
 import json
+from html.parser import HTMLParser
 import math
 import os
 import threading
 import time
 from pathlib import Path
+from urllib.request import Request, urlopen
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from midea_cloud import AC_FAN_AUTO, AC_MODE_HEAT, MideaCloud
@@ -27,6 +29,16 @@ THERMOSTAT_ENABLED = os.environ.get("MIDEA_THERMOSTAT_ENABLED", "0") == "1"
 THERMOSTAT_ON_C = float(os.environ.get("MIDEA_THERMOSTAT_ON_C", "6"))
 THERMOSTAT_OFF_C = float(os.environ.get("MIDEA_THERMOSTAT_OFF_C", "10"))
 THERMOSTAT_SETPOINT_C = max(17, float(os.environ.get("MIDEA_THERMOSTAT_SETPOINT_C", "17")))
+THERMOSTAT_MIN_ON_SECONDS = max(0, int(os.environ.get("MIDEA_THERMOSTAT_MIN_ON_SECONDS", "1800")))
+THERMOSTAT_MIN_OFF_SECONDS = max(0, int(os.environ.get("MIDEA_THERMOSTAT_MIN_OFF_SECONDS", "1800")))
+THERMOSTAT_WARMUP_TIMEOUT_SECONDS = max(300, int(os.environ.get("MIDEA_THERMOSTAT_WARMUP_TIMEOUT_SECONDS", "600")))
+THERMOSTAT_PREHEAT_C = float(os.environ.get("MIDEA_THERMOSTAT_PREHEAT_C", "7"))
+WEATHER_URL = os.environ.get(
+    "MIDEA_WEATHER_URL",
+    "https://www.idokep.hu/elorejelzes/M%C3%81TRASZENTISTV%C3%81N",
+)
+WEATHER_CACHE_SECONDS = max(900, int(os.environ.get("MIDEA_WEATHER_CACHE_SECONDS", "1800")))
+WEATHER_COLD_FORECAST_C = float(os.environ.get("MIDEA_WEATHER_COLD_FORECAST_C", "0"))
 THERMOSTAT_DEVICE_NAMES = {
     name.strip()
     for name in os.environ.get("MIDEA_THERMOSTAT_DEVICE_NAMES", "").split(",")
@@ -45,6 +57,7 @@ METRICS = {
     "devices": {},
     "thermostat_error": 0,
     "thermostat_heating": {},
+    "thermostat_warmup_failed": {},
 }
 
 CLIENT = None
@@ -71,29 +84,107 @@ def _sample(name, labels, value):
     return f"{name}{{{rendered}}} {value}"
 
 
+class _HourlyForecastParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.items = []
+        self.current = None
+        self.field = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "div":
+            return
+        classes = set(dict(attrs).get("class", "").split())
+        if "wide-hourly-forecast-card" in classes:
+            self._finish_item()
+            self.current = {}
+        elif self.current is not None and "wide-hourly-forecast-hour" in classes:
+            self.field = "hour"
+        elif self.current is not None and "tempValue" in classes:
+            self.field = "temperature"
+
+    def handle_data(self, data):
+        if self.current is not None and self.field:
+            self.current.setdefault(self.field, "")
+            self.current[self.field] += data.strip()
+
+    def handle_endtag(self, tag):
+        if tag == "div" and self.field:
+            self.field = None
+
+    def _finish_item(self):
+        if not self.current:
+            return
+        hour = self.current.get("hour", "").strip()
+        raw = self.current.get("temperature", "").strip()
+        try:
+            temperature = float(raw)
+        except (TypeError, ValueError):
+            temperature = None
+        if hour and temperature is not None:
+            self.items.append({"hour": hour, "temperature": temperature})
+        self.current = None
+        self.field = None
+
+    def close(self):
+        super().close()
+        self._finish_item()
+
+
+WEATHER_CACHE = {"fetched_at": 0.0, "last_success": 0.0, "hours": None}
+
+
+def _weather_forecast(now):
+    if now - WEATHER_CACHE["fetched_at"] < WEATHER_CACHE_SECONDS:
+        return WEATHER_CACHE["hours"]
+    request = Request(
+        WEATHER_URL,
+        headers={"User-Agent": "MideaHouseHeating/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            document = response.read(2_000_000).decode("utf-8", "replace")
+        parser = _HourlyForecastParser()
+        parser.feed(document)
+        parser.close()
+        hours = [item for item in parser.items if item["hour"] and item["temperature"] is not None]
+        if not hours:
+            raise ValueError("hourly forecast was not found")
+        WEATHER_CACHE.update(fetched_at=now, last_success=now, hours=hours)
+        return hours
+    except Exception as exc:
+        # Keep the last usable forecast; temperature hysteresis remains active
+        # if the weather page is unavailable.
+        if WEATHER_CACHE["hours"] is None:
+            print(f"Midea weather forecast unavailable ({type(exc).__name__})", flush=True)
+        WEATHER_CACHE["fetched_at"] = now
+        if now - WEATHER_CACHE["last_success"] > 6 * 3600:
+            return None
+        return WEATHER_CACHE["hours"]
+
+
 def _load_state():
     try:
         state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
         state = {}
     except Exception:
-        print("Midea thermostat state file could not be read; starting with an empty latch state.", flush=True)
+        print("Midea thermostat state file could not be read; starting with an empty controller state.", flush=True)
         state = {}
 
-    if not isinstance(state, dict):
+    # Ignore the old latch-only format. Device status is the source of truth
+    # after this controller version starts.
+    if not isinstance(state, dict) or state.get("version") != 2:
         state = {}
-    heating = state.get("heating", {})
-    last_action = state.get("last_action", {})
-    return {
-        "heating": heating if isinstance(heating, dict) else {},
-        "last_action": last_action if isinstance(last_action, dict) else {},
-    }
+    keys = ("heating", "last_action", "on_started", "off_since", "warmup_failed")
+    return {key: state.get(key, {}) if isinstance(state.get(key, {}), dict) else {} for key in keys}
 
 
 def _save_state(state):
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = STATE_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    payload = {"version": 2, **state}
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     os.chmod(temporary, 0o600)
     temporary.replace(STATE_FILE)
 
@@ -110,7 +201,7 @@ def _client():
 
 
 def _set_ac(client, appliance_id, power_on):
-    # Preserve the appliance saved mode, target temperature, and fan setting.
+    # Power-only commands preserve the appliance's saved mode and settings.
     return client.set_ac(appliance_id, power_on=power_on)
 
 
@@ -121,62 +212,85 @@ def _apply_thermostat(client, appliance_id, device, values, state, now):
         return False
 
     temperature = values["indoor_temp"]
+    running = bool(values.get("running"))
+    mode_is_heat = str(values.get("mode", "")).lower() == "heat"
     heating = state["heating"]
     last_action = state["last_action"]
-    active = bool(heating.get(device))
-
-    # Recover a prior successful heat command if the state file was lost.
-    current_mode_is_heat = str(values.get("mode", "")).lower() == "heat"
-    current_target = _number(values.get("target_temp"))
-    if not active and temperature < THERMOSTAT_OFF_C:
-        active = (
-            current_mode_is_heat
-            and current_target == THERMOSTAT_SETPOINT_C
-            and bool(values.get("running"))
-        )
-        if active:
-            heating[device] = True
-            last_action.setdefault(device, now)
-            _save_state(state)
-
+    on_started = state["on_started"]
+    off_since = state["off_since"]
+    warmup_failed = state["warmup_failed"]
     action = None
-    if (
-        not active
-        and temperature >= THERMOSTAT_OFF_C
-        and current_mode_is_heat
-        and current_target == THERMOSTAT_SETPOINT_C
-    ):
-        action = False
-    elif active and temperature >= THERMOSTAT_OFF_C:
-        action = False
-    elif not active and temperature <= THERMOSTAT_ON_C:
-        action = True
-    elif active and temperature < THERMOSTAT_OFF_C:
-        mode_is_heat = str(values.get("mode", "")).lower() == "heat"
-        target = _number(values.get("target_temp"))
-        retry_due = now - float(last_action.get(device, 0)) >= 300
-        if (not mode_is_heat or target != THERMOSTAT_SETPOINT_C) and retry_due:
-            action = True
+
+    if running:
+        heating[device] = mode_is_heat
+        if device not in on_started:
+            on_started[device] = {"at": now, "temperature": temperature}
+        cycle = on_started[device]
+        elapsed = now - float(cycle.get("at", now))
+        baseline = _number(cycle.get("temperature"))
+        gained = temperature - baseline if baseline is not None else 0
+        if not mode_is_heat:
+            warmup_failed[device] = True
+        elif elapsed >= THERMOSTAT_WARMUP_TIMEOUT_SECONDS and gained < 1.0:
+            warmup_failed[device] = True
+        elif gained >= 1.0:
+            warmup_failed.pop(device, None)
+
+        if temperature >= THERMOSTAT_OFF_C and elapsed >= THERMOSTAT_MIN_ON_SECONDS:
+            action = False
+    else:
+        was_running = bool(heating.pop(device, False))
+        on_started.pop(device, None)
+        warmup_failed.pop(device, None)
+        if was_running:
+            off_since[device] = now
+
+        # If a cold night is forecast, use the warmer hours to preheat sooner.
+        forecast = _weather_forecast(now)
+        outdoor = _number(values.get("outdoor_temp"))
+        forecast_values = [item["temperature"] for item in (forecast or [])[:8]]
+        forecast_is_freezing = bool(
+            forecast_values and min(forecast_values) <= WEATHER_COLD_FORECAST_C
+        )
+        trigger = THERMOSTAT_ON_C
+        if forecast_is_freezing and outdoor is not None and outdoor >= 3:
+            trigger = max(trigger, THERMOSTAT_PREHEAT_C)
+
+        if temperature <= trigger:
+            last_off = _number(off_since.get(device))
+            minimum_off_elapsed = (
+                last_off is None or now - last_off >= THERMOSTAT_MIN_OFF_SECONDS
+            )
+            # Prevent short cycling, but never delay protection at/below 6 C.
+            if minimum_off_elapsed or temperature <= THERMOSTAT_ON_C:
+                action = True
 
     if action is None:
+        _save_state(state)
         return False
 
     result = _set_ac(client, appliance_id, action)
     if not result:
-        raise RuntimeError("AC did not acknowledge thermostat command")
+        raise RuntimeError("AC did not acknowledge power command")
 
     last_action[device] = now
     if action:
-        heating[device] = True
-        verb = "heat on"
+        heating[device] = False  # Waiting for the next poll to verify Heat mode.
+        on_started[device] = {"at": now, "temperature": temperature}
+        off_since.pop(device, None)
+        warmup_failed.pop(device, None)
+        verb = "power on"
     else:
         heating.pop(device, None)
-        last_action.pop(device, None)
-        verb = "heat off"
+        on_started.pop(device, None)
+        off_since[device] = now
+        warmup_failed.pop(device, None)
+        verb = "power off"
     _save_state(state)
     print(
         f"Midea thermostat accepted {verb} for {device} "
-        f"(room={temperature:.1f}C, setpoint={THERMOSTAT_SETPOINT_C:.0f}C)",
+        f"(indoor={temperature:.1f}C, trigger={THERMOSTAT_ON_C:.1f}C, "
+        f"stop={THERMOSTAT_OFF_C:.1f}C)",
         flush=True,
     )
     return True
@@ -191,6 +305,7 @@ def render_metrics():
             "devices": dict(METRICS["devices"]),
             "thermostat_error": METRICS["thermostat_error"],
             "thermostat_heating": dict(METRICS["thermostat_heating"]),
+            "thermostat_warmup_failed": dict(METRICS["thermostat_warmup_failed"]),
         }
 
     lines = [
@@ -206,6 +321,8 @@ def render_metrics():
         "# HELP midea_thermostat_enabled Whether the automatic Midea temperature controller is enabled.",
         "# TYPE midea_thermostat_enabled gauge",
         f"midea_thermostat_enabled {int(THERMOSTAT_ENABLED)}",
+        "# HELP midea_thermostat_warmup_failed Whether an AC failed to warm its sensor by 1 C within the allowed time.",
+        "# TYPE midea_thermostat_warmup_failed gauge",
         "# HELP midea_thermostat_control_error Whether a thermostat command failed during the latest poll.",
         "# TYPE midea_thermostat_control_error gauge",
         f'midea_thermostat_control_error {snapshot["thermostat_error"]}',
@@ -239,6 +356,8 @@ def render_metrics():
         for device in sorted(snapshot["devices"]):
             active = snapshot["thermostat_heating"].get(device, False)
             lines.append(_sample("midea_thermostat_heating", {"device": device}, int(bool(active))))
+            failed = snapshot["thermostat_warmup_failed"].get(device, False)
+            lines.append(_sample("midea_thermostat_warmup_failed", {"device": device}, int(bool(failed))))
 
     return "\n".join(lines) + "\n"
 
@@ -302,6 +421,7 @@ def poll_once():
         METRICS["devices"] = devices
         METRICS["thermostat_error"] = thermostat_error
         METRICS["thermostat_heating"] = dict(state["heating"])
+        METRICS["thermostat_warmup_failed"] = dict(state["warmup_failed"])
         if errors:
             METRICS["up"] = 0
         else:
