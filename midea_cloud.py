@@ -348,6 +348,7 @@ def parse_ac_response(data):
         "running": running,
         "mode": mode,
         "target_temp": target_temp,
+        "fan_speed": d[3] & 0x7F,
         "indoor_temp": indoor_temp,
         "outdoor_temp": outdoor_temp,
     }

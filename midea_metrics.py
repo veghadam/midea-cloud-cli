@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from midea_cloud import AC_FAN_AUTO, AC_MODE_HEAT, MideaCloud
+from midea_cloud import AC_FAN_AUTO, AC_MODES_BY_NAME, MideaCloud
 
 PORT = int(os.environ.get("MIDEA_METRICS_PORT", "9899"))
 POLL_INTERVAL = max(60, int(os.environ.get("MIDEA_METRICS_INTERVAL_SECONDS", "300")))
@@ -201,8 +201,24 @@ def _client():
 
 
 def _set_ac(client, appliance_id, power_on):
-    # Power-only commands preserve the appliance's saved mode and settings.
-    return client.set_ac(appliance_id, power_on=power_on)
+    # The Midea SET frame always carries mode/target/fan fields. Read them first
+    # and echo them unchanged so a power toggle cannot replace saved settings.
+    current = client.get_ac_status(appliance_id)
+    if not current:
+        raise RuntimeError("could not read current AC settings before power command")
+    mode = AC_MODES_BY_NAME.get(str(current.get("mode", "")).lower())
+    target = _number(current.get("target_temp"))
+    fan = current.get("fan_speed", AC_FAN_AUTO)
+    if mode is None or target is None:
+        raise RuntimeError("current AC settings are incomplete")
+    return client.set_ac(
+        appliance_id,
+        power_on=power_on,
+        mode=mode,
+        temp=target,
+        fan=fan,
+        prompt_tone=False,
+    )
 
 
 def _apply_thermostat(client, appliance_id, device, values, state, now):
