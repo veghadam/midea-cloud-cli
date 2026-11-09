@@ -58,13 +58,13 @@ SUPPORTED_APPS = {
 DEVICE_TYPE_AC = 0xAC
 DEVICE_TYPE_DEHUMIDIFIER = 0xA1
 
-# AC operating modes
-AC_MODE_AUTO = 0
-AC_MODE_COOL = 1
-AC_MODE_DRY = 2
-AC_MODE_HEAT = 3
-AC_MODE_FAN = 4
-AC_MODES = {0: "Auto", 1: "Cool", 2: "Dry", 3: "Heat", 4: "Fan"}
+# AC mode codes in the appliance payload are one-based.
+AC_MODE_AUTO = 1
+AC_MODE_COOL = 2
+AC_MODE_DRY = 3
+AC_MODE_HEAT = 4
+AC_MODE_FAN = 5
+AC_MODES = {1: "Auto", 2: "Cool", 3: "Dry", 4: "Heat", 5: "Fan"}
 AC_MODES_BY_NAME = {v.lower(): k for k, v in AC_MODES.items()}
 
 # AC fan speeds
@@ -284,6 +284,7 @@ def build_ac_set_command(power_on, mode=AC_MODE_AUTO, temp=24, fan=AC_FAN_AUTO,
     power = 0x01 if power_on else 0
     tone = 0x40 if prompt_tone else 0
     mode_bits = (mode << 5) & 0xE0
+    temp = max(17.0, float(temp))
     temp_int = int(temp)
     temp_half = 0x10 if round(temp * 2) % 2 != 0 else 0
     temp_bits = (temp_int - 16) & 0x0F
@@ -554,7 +555,7 @@ def main():
         choices=["auto", "cool", "dry", "heat", "fan"],
         help="Set operating mode",
     )
-    ctrl.add_argument("--temp", type=float, help="Set target temperature (16-30)")
+    ctrl.add_argument("--temp", type=float, help="Set target temperature (17-30)")
     ctrl.add_argument(
         "--fan",
         choices=["auto", "low", "medium", "high"],
