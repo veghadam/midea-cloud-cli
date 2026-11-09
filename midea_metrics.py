@@ -146,7 +146,14 @@ def _apply_thermostat(client, appliance_id, device, values, state, now):
             _save_state(state)
 
     action = None
-    if active and temperature >= THERMOSTAT_OFF_C:
+    if (
+        not active
+        and temperature >= THERMOSTAT_OFF_C
+        and current_mode_is_heat
+        and current_target == THERMOSTAT_SETPOINT_C
+    ):
+        action = False
+    elif active and temperature >= THERMOSTAT_OFF_C:
         action = False
     elif not active and temperature <= THERMOSTAT_ON_C:
         action = True
